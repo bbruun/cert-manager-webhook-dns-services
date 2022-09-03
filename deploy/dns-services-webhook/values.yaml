@@ -13,7 +13,7 @@ certManager:
   serviceAccountName: cert-manager
 
 image:
-  repository: bbruun/dns-services-webhook
+  repository: dns-services-webhook
   tag: latest
   pullPolicy: Always
   # imagePullSecrets is the name of the regcred secret to use - needs to be in the

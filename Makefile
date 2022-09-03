@@ -1,7 +1,7 @@
 OS ?= $(shell go env GOOS)
 ARCH ?= $(shell go env GOARCH)
 
-IMAGE_NAME := "bbruun/dns-services-webhook"
+IMAGE_NAME := "dns-services-webhook"
 IMAGE_TAG := "latest"
 REGISTRY := docker.io
 
