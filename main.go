@@ -1,17 +1,111 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
 	"os"
+	"strconv"
+	"strings"
 
 	extapi "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	//"k8s.io/client-go/kubernetes"
+
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	"github.com/jetstack/cert-manager/pkg/acme/webhook/apis/acme/v1alpha1"
 	"github.com/jetstack/cert-manager/pkg/acme/webhook/cmd"
 )
+
+type ApiDNS struct {
+	ServiceIds []string `json:"service_ids,omitempty"`
+	Zones      []struct {
+		DomainID  string `json:"domain_id,omitempty"`
+		Name      string `json:"name,omitempty"`
+		ServiceID string `json:"service_id,omitempty"`
+	} `json:"zones,omitempty"`
+}
+
+type RecordCreate struct {
+	Name     string `json:"name"`
+	Type     string `json:"type" default:"TXT"`
+	Priority string `json:"priority,omitempty"`
+	Content  string `json:"content"`
+	TTL      int    `json:"ttl"`
+}
+
+func (r *RecordCreate) ToText() string {
+	/*
+		Output the info in readable JSON
+	*/
+	out, _ := json.MarshalIndent(r, "", "  ")
+	return fmt.Sprintf("RecordCreate{}: \n%s\n\n", out)
+}
+
+type Services struct {
+	Services []struct {
+		ID           string `json:"id"`
+		Domain       string `json:"domain"`
+		Total        string `json:"total"`
+		Status       string `json:"status"`
+		Billingcycle string `json:"billingcycle"`
+		NextDue      string `json:"next_due"`
+		Category     string `json:"category"`
+		CategoryURL  string `json:"category_url"`
+		Name         string `json:"name"`
+	} `json:"services,omitempty"`
+}
+
+type DomainInfo struct {
+	ZoneListID string
+	Domain_id  string
+	Name       string
+	Service_id string
+}
+
+func (d *DomainInfo) ToText() string {
+	/*
+		Output the info in readable JSON
+	*/
+	out, _ := json.MarshalIndent(d, "", "  ")
+	return fmt.Sprintf("DomainInfo{}: \n%s\n\n", out)
+}
+
+type PostRequestCreateReponse struct {
+	Success bool `json:"success"`
+	Record  struct {
+		Name     string `json:"name"`
+		Type     string `json:"type"`
+		TTL      int    `json:"ttl"`
+		Priority int    `json:"priority"`
+		Content  string `json:"content"`
+	} `json:"record"`
+	Info [][]string `json:"info"`
+}
+
+func (p *PostRequestCreateReponse) LogInfo(ch *v1alpha1.ChallengeRequest) string {
+	/*
+		Output as JSON in one line
+	*/
+
+	// out, _ := json.Marshal(p)
+	// fmt.Printf("JSON: %s\n", out)
+
+	var fqdn = ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1]
+	return fmt.Sprintf("The TXT record '%v' has been created with content '%v'\n", fqdn, ch.Key)
+
+}
+func (p *PostRequestCreateReponse) ToText() string {
+	/*
+		Output the info in readable JSON
+	*/
+	out, _ := json.MarshalIndent(p, "", "  ")
+	return fmt.Sprintf("PostRequestCreateReponse{}: \n%s\n\n", out)
+}
 
 var GroupName = os.Getenv("GROUP_NAME")
 
@@ -20,105 +114,235 @@ func main() {
 		panic("GROUP_NAME must be specified")
 	}
 
-	// This will register our custom DNS provider with the webhook serving
-	// library, making it available as an API under the provided GroupName.
-	// You can register multiple DNS provider implementations with a single
-	// webhook, where the Name() method will be used to disambiguate between
-	// the different implementations.
 	cmd.RunWebhookServer(GroupName,
 		&customDNSProviderSolver{},
 	)
 }
 
-// customDNSProviderSolver implements the provider-specific logic needed to
-// 'present' an ACME challenge TXT record for your own DNS provider.
-// To do so, it must implement the `github.com/jetstack/cert-manager/pkg/acme/webhook.Solver`
-// interface.
 type customDNSProviderSolver struct {
-	// If a Kubernetes 'clientset' is needed, you must:
-	// 1. uncomment the additional `client` field in this structure below
-	// 2. uncomment the "k8s.io/client-go/kubernetes" import at the top of the file
-	// 3. uncomment the relevant code in the Initialize method below
-	// 4. ensure your webhook's service account has the required RBAC role
-	//    assigned to it for interacting with the Kubernetes APIs you need.
-	//client kubernetes.Clientset
+	client kubernetes.Clientset
 }
 
-// customDNSProviderConfig is a structure that is used to decode into when
-// solving a DNS01 challenge.
-// This information is provided by cert-manager, and may be a reference to
-// additional configuration that's needed to solve the challenge for this
-// particular certificate or issuer.
-// This typically includes references to Secret resources containing DNS
-// provider credentials, in cases where a 'multi-tenant' DNS solver is being
-// created.
-// If you do *not* require per-issuer or per-certificate configuration to be
-// provided to your webhook, you can skip decoding altogether in favour of
-// using CLI flags or similar to provide configuration.
-// You should not include sensitive information here. If credentials need to
-// be used by your provider here, you should reference a Kubernetes Secret
-// resource and fetch these credentials using a Kubernetes clientset.
 type customDNSProviderConfig struct {
-	// Change the two fields below according to the format of the configuration
-	// to be decoded.
-	// These fields will be set by users in the
-	// `issuer.spec.acme.dns01.providers.webhook.config` field.
-
-	//Email           string `json:"email"`
-	//APIKeySecretRef v1alpha1.SecretKeySelector `json:"apiKeySecretRef"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Host     string `json:"host"`
 }
 
-// Name is used as the name for this DNS solver when referencing it on the ACME
-// Issuer resource.
-// This should be unique **within the group name**, i.e. you can have two
-// solvers configured with the same Name() **so long as they do not co-exist
-// within a single webhook deployment**.
-// For example, `cloudflare` may be used as the name of a solver.
 func (c *customDNSProviderSolver) Name() string {
-	return "my-custom-solver"
+	return "dns.services.cert-manager.io"
 }
 
-// Present is responsible for actually presenting the DNS record with the
-// DNS provider.
-// This method should tolerate being called multiple times with the same value.
-// cert-manager itself will later perform a self check to ensure that the
-// solver has correctly configured the DNS provider.
+func findZoneInfo(ch *v1alpha1.ChallengeRequest) (DomainInfo, error) {
+	//fmt.Printf("Searching for %+v in API zone data:\n", ch.DNSName)
+	cfg, err := loadConfig(ch.Config)
+	if err != nil {
+		return DomainInfo{}, err
+	}
+
+	url := cfg.Host + "/dns"
+	h := http.Client{}
+	req, _ := http.NewRequest("GET", url, nil)
+	req.SetBasicAuth(cfg.Email, cfg.Password)
+
+	r, _ := h.Do(req)
+	defer r.Body.Close()
+
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		panic(err.Error())
+
+	}
+
+	var bodyApiDNS ApiDNS
+	json.Unmarshal(body, &bodyApiDNS)
+
+	var domainInformation DomainInfo
+	for k, v := range bodyApiDNS.Zones {
+		if strings.Contains(ch.ResolvedFQDN, v.Name) {
+			domainInformation.ZoneListID = strconv.Itoa(k)
+			domainInformation.Domain_id = v.DomainID
+			domainInformation.Name = v.Name
+			domainInformation.Service_id = v.ServiceID
+			break
+		}
+	}
+
+	return domainInformation, nil
+
+}
+
+func createTXTRecord(ch *v1alpha1.ChallengeRequest, domainInformation DomainInfo) (PostRequestCreateReponse, error) {
+	cfg, err := loadConfig(ch.Config)
+	if err != nil {
+		return PostRequestCreateReponse{}, err
+	}
+
+	postData := RecordCreate{
+		Name:    ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1],
+		Type:    "TXT",
+		Content: ch.Key,
+		TTL:     10,
+	}
+
+	url := fmt.Sprintf("%s/service/%s/dns/%s/records", cfg.Host, domainInformation.Service_id, domainInformation.Domain_id)
+
+	createHttpClient := http.Client{}
+
+	var buf bytes.Buffer
+
+	err = json.NewEncoder(&buf).Encode(postData)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, url, &buf)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(cfg.Email, cfg.Password)
+
+	r, _ := createHttpClient.Do(req)
+	defer r.Body.Close()
+
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	var bodyPostData PostRequestCreateReponse
+	json.Unmarshal(body, &bodyPostData)
+	fmt.Printf("Response from API: %+v\n", bodyPostData)
+
+	return bodyPostData, err
+}
+func getRecord(ch *v1alpha1.ChallengeRequest, domainInformation DomainInfo) (string, error) {
+	cfg, err := loadConfig(ch.Config)
+	if err != nil {
+		fmt.Printf("- getRecord(): could not load cfg\n")
+		return "-1", err
+	}
+
+	url := fmt.Sprintf("%s/service/%s/dns/%s", cfg.Host, domainInformation.Service_id, domainInformation.Domain_id)
+	var buf bytes.Buffer
+	getHttpClient := http.Client{}
+
+	req, _ := http.NewRequest(http.MethodGet, url, &buf)
+	req.Header.Set("Accpet", "application/json")
+	req.SetBasicAuth(cfg.Email, cfg.Password)
+
+	r, _ := getHttpClient.Do(req)
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	type DNSList struct {
+		ServiceID int    `json:"service_id,omitempty"`
+		Name      string `json:"name,omitempty"`
+		Records   []struct {
+			ID       string `json:"id,omitempty"`
+			Name     string `json:"name,omitempty"`
+			TTL      int    `json:"ttl,omitempty"`
+			Priority int    `json:"priority,omitempty"`
+			Content  string `json:"content,omitempty"`
+			Type     string `json:"type,omitempty"`
+		} `json:"records,omitempty"`
+	}
+
+	var bodyPostData DNSList
+	var returnId = "-1"
+	json.Unmarshal(body, &bodyPostData)
+
+	domToFind := ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1]
+	for _, v := range bodyPostData.Records {
+		if v.Name != domToFind {
+			continue
+		}
+		if strings.Trim(v.Type, "\"") != "TXT" {
+			continue
+		}
+		if strings.Trim(v.Content, "\"") != ch.Key {
+			continue
+		}
+
+		returnId = v.ID
+	}
+	fmt.Printf("Didn't find %s as a TXT record - nothing to delete\n", ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1])
+	return returnId, nil
+}
+
 func (c *customDNSProviderSolver) Present(ch *v1alpha1.ChallengeRequest) error {
+	ch.DNSName = os.Getenv("TEST_ZONE_NAME")
+
+	domainInformation, err := findZoneInfo(ch)
+	if err != nil {
+		log.Fatal("API did not find any zones to work with.")
+	}
+
+	createdTXTRecord, err := createTXTRecord(ch, domainInformation)
+	if err != nil {
+		log.Fatalf("API could not create TXT record '%s' with value '%s'\n", domainInformation.Name, ch.Key)
+	}
+	fmt.Printf("createdTXTRecord.Record.Name = %+v\n", createdTXTRecord.Record.Name)
+	if createdTXTRecord.Record.Name != "" {
+		fmt.Printf("%s\n", createdTXTRecord.LogInfo(ch))
+	} else {
+		fmt.Printf("The TXT record was not created\n")
+	}
+
+	return nil
+}
+
+func (c *customDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
+	fmt.Printf("\nDelete TXT record \"%v\"\n", ch.ResolvedFQDN)
+
 	cfg, err := loadConfig(ch.Config)
 	if err != nil {
 		return err
 	}
 
-	// TODO: do something more useful with the decoded configuration
-	fmt.Printf("Decoded configuration %v", cfg)
+	ch.DNSName = os.Getenv("TEST_ZONE_NAME")
 
-	// TODO: add code that sets a record in the DNS provider's console
+	domainInformation, err2 := findZoneInfo(ch)
+	if err2 != nil {
+		log.Fatal("Could not get zone information from API")
+	}
+
+	recordId, err := getRecord(ch, domainInformation)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	if recordId == "-1" {
+		fmt.Printf("- no apparent record found to deleted... %s\n", recordId)
+		return nil
+	} else {
+		fmt.Printf("Record ID to delete: %s\n", recordId)
+	}
+
+	url := fmt.Sprintf("%s/service/%s/dns/%s/records/%s", cfg.Host, domainInformation.Service_id, domainInformation.Domain_id, recordId)
+	var buf bytes.Buffer
+	getHttpClient := http.Client{}
+
+	req, _ := http.NewRequest(http.MethodDelete, url, &buf)
+	req.Header.Set("Accpet", "application/json")
+	req.SetBasicAuth(cfg.Email, cfg.Password)
+
+	r, err := getHttpClient.Do(req)
+	if err != nil {
+		panic(err.Error())
+	}
+	if r.StatusCode != 200 {
+		fmt.Printf("delete http status: %v %v\n", r.Status, r.StatusCode)
+	}
+
+	fmt.Printf("%v TXT record with ID %s has been deleted\n", ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1], recordId)
+
 	return nil
 }
 
-// CleanUp should delete the relevant TXT record from the DNS provider console.
-// If multiple TXT records exist with the same record name (e.g.
-// _acme-challenge.example.com) then **only** the record with the same `key`
-// value provided on the ChallengeRequest should be cleaned up.
-// This is in order to facilitate multiple DNS validations for the same domain
-// concurrently.
-func (c *customDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
-	// TODO: add code that deletes a record from the DNS provider's console
-	return nil
-}
-
-// Initialize will be called when the webhook first starts.
-// This method can be used to instantiate the webhook, i.e. initialising
-// connections or warming up caches.
-// Typically, the kubeClientConfig parameter is used to build a Kubernetes
-// client that can be used to fetch resources from the Kubernetes API, e.g.
-// Secret resources containing credentials used to authenticate with DNS
-// provider accounts.
-// The stopCh can be used to handle early termination of the webhook, in cases
-// where a SIGTERM or similar signal is sent to the webhook process.
 func (c *customDNSProviderSolver) Initialize(kubeClientConfig *rest.Config, stopCh <-chan struct{}) error {
-	///// UNCOMMENT THE BELOW CODE TO MAKE A KUBERNETES CLIENTSET AVAILABLE TO
-	///// YOUR CUSTOM DNS PROVIDER
+	// UNCOMMENT THE BELOW CODE TO MAKE A KUBERNETES CLIENTSET AVAILABLE TO
+	// YOUR CUSTOM DNS PROVIDER
 
 	//cl, err := kubernetes.NewForConfig(kubeClientConfig)
 	//if err != nil {
@@ -127,12 +351,10 @@ func (c *customDNSProviderSolver) Initialize(kubeClientConfig *rest.Config, stop
 	//
 	//c.client = cl
 
-	///// END OF CODE TO MAKE KUBERNETES CLIENTSET AVAILABLE
+	// END OF CODE TO MAKE KUBERNETES CLIENTSET AVAILABLE
 	return nil
 }
 
-// loadConfig is a small helper function that decodes JSON configuration into
-// the typed config struct.
 func loadConfig(cfgJSON *extapi.JSON) (customDNSProviderConfig, error) {
 	cfg := customDNSProviderConfig{}
 	// handle the 'base case' where no configuration has been provided
