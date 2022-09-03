@@ -1,12 +1,19 @@
 OS ?= $(shell go env GOOS)
 ARCH ?= $(shell go env GOARCH)
 
-IMAGE_NAME := "webhook"
+IMAGE_NAME := "bbruun/dns-services-webhook"
 IMAGE_TAG := "latest"
+REGISTRY := docker.io
 
 OUT := $(shell pwd)/_out
 
-KUBE_VERSION=1.21.2
+KUBE_VERSION=1.23.1
+
+ifeq ($(shell test -e /usr/bin/podman) && echo -n yes),yes)
+  PODMAN = 1
+else
+  PODMAN = 0
+endif
 
 $(shell mkdir -p "$(OUT)")
 export TEST_ASSET_ETCD=_test/kubebuilder/bin/etcd
@@ -30,12 +37,25 @@ clean-kubebuilder:
 	rm -Rf _test/kubebuilder
 
 build:
-	docker build -t "$(IMAGE_NAME):$(IMAGE_TAG)" .
+ifeq (/usr/bin/podman,/usr/bin/podman)
+	echo "Using podman to build container image"
+	/usr/bin/podman build . -f Dockerfile -t "$(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)"
+else
+	echo "Using Docker to build container image"
+	/usr/bin/docker build . -t "$(IMAGE_NAME):$(IMAGE_TAG)"
+endif
+
+push:    
+ifeq (/usr/bin/podman,/usr/bin/podman)
+	/usr/bin/podman push "$(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)"
+else
+	/usr/bin/docker push "$(IMAGE_NAME):$(IMAGE_TAG)"
+endif
 
 .PHONY: rendered-manifest.yaml
 rendered-manifest.yaml:
 	helm template \
-	    --name example-webhook \
+	    --name cert-manager-webhook-dns-services \
         --set image.repository=$(IMAGE_NAME) \
         --set image.tag=$(IMAGE_TAG) \
         deploy/example-webhook > "$(OUT)/rendered-manifest.yaml"
