@@ -20,3 +20,4 @@ _test
 
 # Ignore config.json 
 testdata/dns-services/config.json
+testdata/dns-services/dns-services.yaml
