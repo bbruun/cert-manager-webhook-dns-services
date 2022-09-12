@@ -1,5 +1,10 @@
 {
-    "Email": "you@example.com",
-    "Password": "SecretPassword",
-    "Host": "https://dns.services"
+    "usernameSecretRef": {
+        "name": "dns-services",
+        "key": "username"
+    },
+    "passwordSecretRef": {
+        "name": "dns-services",
+        "key": "password"
+    }
 }
