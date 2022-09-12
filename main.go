@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -11,7 +13,12 @@ import (
 	"strconv"
 	"strings"
 
+	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
 	extapi "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	//"k8s.io/klog"
+
 	//"k8s.io/client-go/kubernetes"
 
 	"k8s.io/client-go/kubernetes"
@@ -20,6 +27,24 @@ import (
 	"github.com/jetstack/cert-manager/pkg/acme/webhook/apis/acme/v1alpha1"
 	"github.com/jetstack/cert-manager/pkg/acme/webhook/cmd"
 )
+
+// Password string `json:"password"`
+
+// PodNamespace is the namespace of the webhook pod
+var PodNamespace = os.Getenv("POD_NAMESPACE")
+
+// PodSecretName is the name of the secret to obtain the Linode API token from
+var PodSecretName = os.Getenv("POD_SECRET_NAME")
+
+// PodSecretKey is the key of the Linode API token within the secret POD_SECRET_NAME
+var PodSecretKey = os.Getenv("POD_SECRET_KEY")
+
+type dnsServicesProviderConfig struct {
+	UsernameSecretRef cmmeta.SecretKeySelector `json:"usernameSecretRef"`
+	PasswordSecretRef cmmeta.SecretKeySelector `json:"passwordSecretRef"`
+	Username          string                   `json:",omitempty"`
+	Password          string                   `json:",omitempty"`
+}
 
 type ApiDNS struct {
 	ServiceIds []string `json:"service_ids,omitempty"`
@@ -35,7 +60,7 @@ type RecordCreate struct {
 	Type     string `json:"type" default:"TXT"`
 	Priority string `json:"priority,omitempty"`
 	Content  string `json:"content"`
-	TTL      int    `json:"ttl"`
+	TTL      string `json:"ttl"`
 }
 
 func (r *RecordCreate) ToText() string {
@@ -65,6 +90,19 @@ type DomainInfo struct {
 	Domain_id  string
 	Name       string
 	Service_id string
+}
+
+type DNSList struct {
+	ServiceID int    `json:"service_id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Records   []struct {
+		ID       string `json:"id,omitempty"`
+		Name     string `json:"name,omitempty"`
+		TTL      int    `json:"ttl,omitempty"`
+		Priority int    `json:"priority,omitempty"`
+		Content  string `json:"content,omitempty"`
+		Type     string `json:"type,omitempty"`
+	} `json:"records,omitempty"`
 }
 
 func (d *DomainInfo) ToText() string {
@@ -104,7 +142,7 @@ func (p *PostRequestCreateReponse) ToText() string {
 		Output the info in readable JSON
 	*/
 	out, _ := json.MarshalIndent(p, "", "  ")
-	return fmt.Sprintf("PostRequestCreateReponse{}: \n%s\n\n", out)
+	return fmt.Sprintf("PostRequestCreateReponse{}: \n%s\n", out)
 }
 
 var GroupName = os.Getenv("GROUP_NAME")
@@ -115,43 +153,55 @@ func main() {
 	}
 
 	cmd.RunWebhookServer(GroupName,
-		&customDNSProviderSolver{},
+		&dnsServicesProviderSolver{},
 	)
 }
 
-type customDNSProviderSolver struct {
-	client kubernetes.Clientset
+type dnsServicesProviderSolver struct {
+	//client kubernetes.Clientset
+	client *kubernetes.Clientset
+	// ctx    context.Context
 }
 
-type customDNSProviderConfig struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Host     string `json:"host"`
-}
-
-func (c *customDNSProviderSolver) Name() string {
+func (c *dnsServicesProviderSolver) Name() string {
 	return "dns.services.cert-manager.io"
 }
 
-func findZoneInfo(ch *v1alpha1.ChallengeRequest) (DomainInfo, error) {
-	//fmt.Printf("Searching for %+v in API zone data:\n", ch.DNSName)
-	cfg, err := loadConfig(ch.Config)
-	if err != nil {
-		return DomainInfo{}, err
+func (c *dnsServicesProviderSolver) findZoneInfo(ch *v1alpha1.ChallengeRequest, cfg dnsServicesProviderConfig) (DomainInfo, error) {
+	fmt.Printf("Searching for %+v in API zone data:\n", ch.DNSName)
+
+	if cfg.Username == "" || cfg.Password == "" {
+		log.Fatalf("no username or password provided or found\n")
 	}
 
-	url := cfg.Host + "/dns"
+	url := "https://dns.services/api/dns"
+	fmt.Printf("- url: %s\n", url)
+	if cfg.Password != "" {
+		fmt.Printf("- credentials: %s:%s\n", cfg.Username, "*******")
+	} else {
+		fmt.Printf("- credentials is missing password !!!")
+		err := errors.New("username or password missing please check Secret")
+		return DomainInfo{}, err
+	}
 	h := http.Client{}
-	req, _ := http.NewRequest("GET", url, nil)
-	req.SetBasicAuth(cfg.Email, cfg.Password)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		fmt.Printf("could not create new http requestion object\n%v\n", err)
+		return DomainInfo{}, err
+	}
+	req.SetBasicAuth(cfg.Username, cfg.Password)
 
-	r, _ := h.Do(req)
+	r, err := h.Do(req)
+	if err != nil {
+		fmt.Printf("Error in connecting to API\n%v\n", err)
+		return DomainInfo{}, err
+	}
 	defer r.Body.Close()
 
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		panic(err.Error())
-
+		fmt.Printf("could not decipher restult from API\n%v\n", err)
+		return DomainInfo{}, err
 	}
 
 	var bodyApiDNS ApiDNS
@@ -159,7 +209,9 @@ func findZoneInfo(ch *v1alpha1.ChallengeRequest) (DomainInfo, error) {
 
 	var domainInformation DomainInfo
 	for k, v := range bodyApiDNS.Zones {
-		if strings.Contains(ch.ResolvedFQDN, v.Name) {
+		fmt.Printf("- bodyApiDNS response: %+v\n", v)
+		fmt.Printf("- ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1]: %s\n", ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1])
+		if strings.Contains(ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1], v.Name) {
 			domainInformation.ZoneListID = strconv.Itoa(k)
 			domainInformation.Domain_id = v.DomainID
 			domainInformation.Name = v.Name
@@ -172,21 +224,30 @@ func findZoneInfo(ch *v1alpha1.ChallengeRequest) (DomainInfo, error) {
 
 }
 
-func createTXTRecord(ch *v1alpha1.ChallengeRequest, domainInformation DomainInfo) (PostRequestCreateReponse, error) {
+func (c *dnsServicesProviderSolver) createTXTRecord(ch *v1alpha1.ChallengeRequest, domainInformation DomainInfo, cfg dnsServicesProviderConfig) (PostRequestCreateReponse, error) {
+	fmt.Printf("createTXTRecord()\n")
 	cfg, err := loadConfig(ch.Config)
 	if err != nil {
 		return PostRequestCreateReponse{}, err
 	}
 
-	postData := RecordCreate{
-		Name:    ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1],
-		Type:    "TXT",
-		Content: ch.Key,
-		TTL:     10,
+	// Convert Secret key data to string
+	tmpSecret, err := c.client.CoreV1().Secrets(ch.ResourceNamespace).Get(context.TODO(), cfg.PasswordSecretRef.Name, metav1.GetOptions{})
+	cfg.Username = string(tmpSecret.Data[cfg.UsernameSecretRef.Key])
+	cfg.Password = string(tmpSecret.Data[cfg.PasswordSecretRef.Key])
+	if err != nil {
+		fmt.Printf("- error : %+v\n", err)
 	}
 
-	url := fmt.Sprintf("%s/service/%s/dns/%s/records", cfg.Host, domainInformation.Service_id, domainInformation.Domain_id)
+	postData := RecordCreate{
+		Name:     ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1],
+		Type:     "TXT",
+		Content:  ch.Key,
+		TTL:      "10",
+		Priority: "10",
+	}
 
+	url := fmt.Sprintf("https://dns.services/api/service/%s/dns/%s/records", domainInformation.Service_id, domainInformation.Domain_id)
 	createHttpClient := http.Client{}
 
 	var buf bytes.Buffer
@@ -198,9 +259,13 @@ func createTXTRecord(ch *v1alpha1.ChallengeRequest, domainInformation DomainInfo
 
 	req, _ := http.NewRequest(http.MethodPost, url, &buf)
 	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(cfg.Email, cfg.Password)
+	req.SetBasicAuth(cfg.Username, cfg.Password)
 
-	r, _ := createHttpClient.Do(req)
+	r, err := createHttpClient.Do(req)
+	if err != nil {
+		fmt.Printf("Error in connecting to API\n%v\n", err)
+		return PostRequestCreateReponse{}, err
+	}
 	defer r.Body.Close()
 
 	body, err := ioutil.ReadAll(r.Body)
@@ -210,42 +275,36 @@ func createTXTRecord(ch *v1alpha1.ChallengeRequest, domainInformation DomainInfo
 
 	var bodyPostData PostRequestCreateReponse
 	json.Unmarshal(body, &bodyPostData)
-	fmt.Printf("Response from API: %+v\n", bodyPostData)
+	fmt.Printf("- response from API: %+v\n", bodyPostData)
 
 	return bodyPostData, err
 }
-func getRecord(ch *v1alpha1.ChallengeRequest, domainInformation DomainInfo) (string, error) {
+
+func (c *dnsServicesProviderSolver) getRecord(ch *v1alpha1.ChallengeRequest, domainInformation DomainInfo, cfg dnsServicesProviderConfig) (string, error) {
 	cfg, err := loadConfig(ch.Config)
 	if err != nil {
-		fmt.Printf("- getRecord(): could not load cfg\n")
 		return "-1", err
 	}
 
-	url := fmt.Sprintf("%s/service/%s/dns/%s", cfg.Host, domainInformation.Service_id, domainInformation.Domain_id)
+	// Convert Secret key data to string
+	tmpSecret, err := c.client.CoreV1().Secrets(ch.ResourceNamespace).Get(context.TODO(), cfg.PasswordSecretRef.Name, metav1.GetOptions{})
+	if err != nil {
+		fmt.Printf("- error : %+v\n", err)
+	}
+	cfg.Username = string(tmpSecret.Data[cfg.UsernameSecretRef.Key])
+	cfg.Password = string(tmpSecret.Data[cfg.PasswordSecretRef.Key])
+
+	url := fmt.Sprintf("https://dns.services/api/service/%s/dns/%s", domainInformation.Service_id, domainInformation.Domain_id)
 	var buf bytes.Buffer
 	getHttpClient := http.Client{}
 
 	req, _ := http.NewRequest(http.MethodGet, url, &buf)
-	req.Header.Set("Accpet", "application/json")
-	req.SetBasicAuth(cfg.Email, cfg.Password)
+	req.SetBasicAuth(cfg.Username, cfg.Password)
 
 	r, _ := getHttpClient.Do(req)
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		panic(err.Error())
-	}
-
-	type DNSList struct {
-		ServiceID int    `json:"service_id,omitempty"`
-		Name      string `json:"name,omitempty"`
-		Records   []struct {
-			ID       string `json:"id,omitempty"`
-			Name     string `json:"name,omitempty"`
-			TTL      int    `json:"ttl,omitempty"`
-			Priority int    `json:"priority,omitempty"`
-			Content  string `json:"content,omitempty"`
-			Type     string `json:"type,omitempty"`
-		} `json:"records,omitempty"`
 	}
 
 	var bodyPostData DNSList
@@ -266,97 +325,116 @@ func getRecord(ch *v1alpha1.ChallengeRequest, domainInformation DomainInfo) (str
 
 		returnId = v.ID
 	}
-	fmt.Printf("Didn't find %s as a TXT record - nothing to delete\n", ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1])
+	fmt.Printf("- didn't find %s as a TXT record - nothing to delete\n", ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1])
 	return returnId, nil
 }
 
-func (c *customDNSProviderSolver) Present(ch *v1alpha1.ChallengeRequest) error {
+func (c *dnsServicesProviderSolver) Present(ch *v1alpha1.ChallengeRequest) error {
 	ch.DNSName = os.Getenv("TEST_ZONE_NAME")
 
-	domainInformation, err := findZoneInfo(ch)
+	cfg, err := loadConfig(ch.Config)
 	if err != nil {
-		log.Fatal("API did not find any zones to work with.")
+		fmt.Printf("- an error occurred loading configuration: %s\n", err)
+		return err
 	}
 
-	createdTXTRecord, err := createTXTRecord(ch, domainInformation)
+	// Convert Secret key data to string
+	tmpSecret, err := c.client.CoreV1().Secrets(ch.ResourceNamespace).Get(context.TODO(), cfg.PasswordSecretRef.Name, metav1.GetOptions{})
 	if err != nil {
-		log.Fatalf("API could not create TXT record '%s' with value '%s'\n", domainInformation.Name, ch.Key)
+		fmt.Printf("- error : %+v\n", err)
 	}
-	fmt.Printf("createdTXTRecord.Record.Name = %+v\n", createdTXTRecord.Record.Name)
+	cfg.Username = string(tmpSecret.Data[cfg.UsernameSecretRef.Key])
+	cfg.Password = string(tmpSecret.Data[cfg.PasswordSecretRef.Key])
+
+	domainInformation, err := c.findZoneInfo(ch, cfg)
+	if err != nil {
+		log.Fatal("- did not find any zones to work with in the API.")
+	}
+
+	createdTXTRecord, err := c.createTXTRecord(ch, domainInformation, cfg)
+	if err != nil {
+		log.Fatalf("- could not create TXT record '%s' with value '%s'\nError: %+v", domainInformation.Name, ch.Key, err)
+	}
+
 	if createdTXTRecord.Record.Name != "" {
 		fmt.Printf("%s\n", createdTXTRecord.LogInfo(ch))
 	} else {
-		fmt.Printf("The TXT record was not created\n")
+		fmt.Printf("- the TXT record '%s' was not created\n", ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1])
 	}
 
 	return nil
 }
 
-func (c *customDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
+func (c *dnsServicesProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
 	fmt.Printf("\nDelete TXT record \"%v\"\n", ch.ResolvedFQDN)
 
 	cfg, err := loadConfig(ch.Config)
 	if err != nil {
 		return err
 	}
+	// Load configuration data
+	tmpSecret, err := c.client.CoreV1().Secrets(ch.ResourceNamespace).Get(context.TODO(), cfg.PasswordSecretRef.Name, metav1.GetOptions{})
+	cfg.Username = string(tmpSecret.Data[cfg.UsernameSecretRef.Key])
+	cfg.Password = string(tmpSecret.Data[cfg.PasswordSecretRef.Key])
+	if err != nil {
+		fmt.Printf("- error : %+v\n", err)
+	}
 
 	ch.DNSName = os.Getenv("TEST_ZONE_NAME")
 
-	domainInformation, err2 := findZoneInfo(ch)
+	domainInformation, err2 := c.findZoneInfo(ch, cfg)
 	if err2 != nil {
 		log.Fatal("Could not get zone information from API")
 	}
 
-	recordId, err := getRecord(ch, domainInformation)
+	recordId, err := c.getRecord(ch, domainInformation, cfg)
 	if err != nil {
 		panic(err.Error())
 	}
 
 	if recordId == "-1" {
-		fmt.Printf("- no apparent record found to deleted... %s\n", recordId)
+		fmt.Printf("- no apparent record found to deleted...\n")
 		return nil
 	} else {
-		fmt.Printf("Record ID to delete: %s\n", recordId)
+		fmt.Printf("- record ID to delete: %s\n", recordId)
 	}
 
-	url := fmt.Sprintf("%s/service/%s/dns/%s/records/%s", cfg.Host, domainInformation.Service_id, domainInformation.Domain_id, recordId)
+	url := fmt.Sprintf("https://dns.services/api/service/%s/dns/%s/records/%s", domainInformation.Service_id, domainInformation.Domain_id, recordId)
 	var buf bytes.Buffer
 	getHttpClient := http.Client{}
 
 	req, _ := http.NewRequest(http.MethodDelete, url, &buf)
-	req.Header.Set("Accpet", "application/json")
-	req.SetBasicAuth(cfg.Email, cfg.Password)
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(cfg.Username, cfg.Password)
 
 	r, err := getHttpClient.Do(req)
 	if err != nil {
 		panic(err.Error())
 	}
 	if r.StatusCode != 200 {
-		fmt.Printf("delete http status: %v %v\n", r.Status, r.StatusCode)
+		fmt.Printf("- delete http status: %v %v\n", r.Status, r.StatusCode)
 	}
 
-	fmt.Printf("%v TXT record with ID %s has been deleted\n", ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1], recordId)
+	fmt.Printf("- %v TXT record with ID %s has been deleted\n", ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1], recordId)
 
 	return nil
 }
 
-func (c *customDNSProviderSolver) Initialize(kubeClientConfig *rest.Config, stopCh <-chan struct{}) error {
-	// UNCOMMENT THE BELOW CODE TO MAKE A KUBERNETES CLIENTSET AVAILABLE TO
-	// YOUR CUSTOM DNS PROVIDER
+func (c *dnsServicesProviderSolver) Initialize(kubeClientConfig *rest.Config, stopCh <-chan struct{}) error {
+	cl, err := kubernetes.NewForConfig(kubeClientConfig)
+	if err != nil {
+		return err
+	}
 
-	//cl, err := kubernetes.NewForConfig(kubeClientConfig)
-	//if err != nil {
-	//	return err
-	//}
-	//
-	//c.client = cl
+	c.client = cl
 
 	// END OF CODE TO MAKE KUBERNETES CLIENTSET AVAILABLE
 	return nil
 }
 
-func loadConfig(cfgJSON *extapi.JSON) (customDNSProviderConfig, error) {
-	cfg := customDNSProviderConfig{}
+func loadConfig(cfgJSON *extapi.JSON) (dnsServicesProviderConfig, error) {
+	cfg := dnsServicesProviderConfig{}
+
 	// handle the 'base case' where no configuration has been provided
 	if cfgJSON == nil {
 		return cfg, nil
