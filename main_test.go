@@ -24,6 +24,7 @@ func TestRunsSuite(t *testing.T) {
 		dns.SetDNSServer("195.242.131.6:53"),
 		dns.SetDNSChallengeKey("dns-services-webhook-challenge-test"),
 		dns.SetPollInterval(10*time.Second),
+		dns.SetStrict(true),
 	)
 
 	fixture.RunBasic(t)
