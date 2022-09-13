@@ -176,9 +176,7 @@ func (c *dnsServicesProviderSolver) findZoneInfo(ch *v1alpha1.ChallengeRequest, 
 
 	url := "https://dns.services/api/dns"
 	fmt.Printf("- url: %s\n", url)
-	if cfg.Password != "" {
-		fmt.Printf("- credentials: %s:%s\n", cfg.Username, "*******")
-	} else {
+	if cfg.Password == "" {
 		fmt.Printf("- credentials is missing password !!!")
 		err := errors.New("username or password missing please check Secret")
 		return DomainInfo{}, err
@@ -209,8 +207,6 @@ func (c *dnsServicesProviderSolver) findZoneInfo(ch *v1alpha1.ChallengeRequest, 
 
 	var domainInformation DomainInfo
 	for k, v := range bodyApiDNS.Zones {
-		fmt.Printf("- bodyApiDNS response: %+v\n", v)
-		fmt.Printf("- ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1]: %s\n", ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1])
 		if strings.Contains(ch.ResolvedFQDN[:len(ch.ResolvedFQDN)-1], v.Name) {
 			domainInformation.ZoneListID = strconv.Itoa(k)
 			domainInformation.Domain_id = v.DomainID
@@ -396,7 +392,7 @@ func (c *dnsServicesProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error
 		fmt.Printf("- no apparent record found to deleted...\n")
 		return nil
 	} else {
-		fmt.Printf("- record ID to delete: %s\n", recordId)
+		fmt.Printf("- record ID to delete is: %s\n", recordId)
 	}
 
 	url := fmt.Sprintf("https://dns.services/api/service/%s/dns/%s/records/%s", domainInformation.Service_id, domainInformation.Domain_id, recordId)
