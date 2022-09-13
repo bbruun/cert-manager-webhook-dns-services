@@ -219,3 +219,13 @@ Also if you fork the repo then please do so :-)
 ## A note on running the test suite
 
 As per https://github.com/cert-manager/webhook-example then please do make sure that any pull-request you make works...
+
+1. Make a copy of the config.json.sample file `cp testdata/dns-services/config.json.sample testdata/dns-services/config.json`
+2. Make a copy of the dns-service.yaml.sample file `cp testdata/dns-services/dns-services.yaml.sample testdata/dns-services/dns-services.yaml`
+3. Update the `dns-service.yaml` **using the base64** version of your username and password for https://DNS.Services (no TOTP needed).
+4. Run the test 
+```shell
+TEST_ZONE_NAME=example.com. make test
+```
+
+Due to limits in the API in regards to amount of logins per time then do not run the test too many times in a row or when setting up new certificates (TLS configuartions in your Ingress/Gateway's). I would guestimate 1-3 certificates per 5min would be the limit - but just in case your certificate is not created, then delete the TLS entry in your Ingress/Gateway, wait 5-10min and add it again.
