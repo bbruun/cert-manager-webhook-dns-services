@@ -33,7 +33,8 @@ helm install \
   cert-manager jetstack/cert-manager \
   --namespace cert-manager \
   --create-namespace \
-  --version v1.9.1
+  --version v1.10.0 \
+  --set 'extraArgs={--dns01-recursive-nameservers-only,--dns01-recursive-nameservers=195.242.131.6:53}'
 ```
 
 Note: If you, like me the developer, is running a home lab k8s cluster on k3s with an internal network and host your own DNS zone in a split setup aka an internal DNS server solely for internal IPs and user a public DNS provide (such as DNS.Services) then add the following to the `helm install ...` command above. If you do not then you'll possibly end up in evil loop as your internal DNS is authoriative the domain on DNS.Services where you created the TXT record which isn't on your internal DNS server. The extra parameter to the `helm install ...` comamnd is: 
