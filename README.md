@@ -34,11 +34,18 @@ helm install \
   --namespace cert-manager \
   --create-namespace \
   --version v1.10.0 \
-  --set 'extraArgs={--dns01-self-check-nameservers=195.242.131.6:53}'
+  --set 'extraArgs={--dns01-recursive-nameservers-only,--dns01-recursive-nameservers=195.242.131.6:53}'
 ```
 
-Note: The `--dns01-self-check-nameservers` is mostly meant for split horizon DNS zones, but can possibly help decrease the time it takes for cert-manager to do the check that the \_acme-challange TXT record has been created and propagated on DNS.Services. The IP is for ns1.dns.services
-[Have alook at the documentation for the `--dns01-self-check-nameservers`](https://cert-manager.io/docs/release-notes/release-notes-0.4/)
+Note: If you, like me the developer, is running a home lab k8s cluster on k3s with an internal network and host your own DNS zone in a split setup aka an internal DNS server solely for internal IPs and user a public DNS provide (such as DNS.Services) then add the following to the `helm install ...` command above. If you do not then you'll possibly end up in evil loop as your internal DNS is authoriative the domain on DNS.Services where you created the TXT record which isn't on your internal DNS server. The extra parameter to the `helm install ...` comamnd is: 
+-
+-```shell
+-heml install \
+-  ... \
+-  --set 'extraArgs={--dns01-recursive-nameservers-only,--dns01-recursive-nameservers=195.242.131.6:53}'
+-```
+-(the IP is for ns1.dns.services)
+-[Taken from CM's DNS resolver troubleshooting guide](https://cert-manager.io/v1.6-docs/configuration/acme/dns01/). You can change the DNS provider (for some reason CM complains about more than one as described in the documentation). **Remember the backslash "\" on the line above when/if you add it - it means "command continues on next line**.
 
 ## Install this DNS.Services Webhook
 
