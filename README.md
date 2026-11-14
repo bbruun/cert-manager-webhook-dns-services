@@ -38,7 +38,7 @@ helm install \
 ```
 
 Note: If you, like me the developer, is running a home lab k8s cluster on k3s with an internal network and host your own DNS zone in a split setup aka an internal DNS server solely for internal IPs and user a public DNS provide (such as DNS.Services) then add the following to the `helm install ...` command above. If you do not then you'll possibly end up in evil loop as your internal DNS is authoriative the domain on DNS.Services where you created the TXT record which isn't on your internal DNS server. The extra parameter to the `helm install ...` comamnd is: 
--
+
 ```shell
 heml install \
   ... \
@@ -56,7 +56,7 @@ As of this alpha release most of the building and testing is done internally wit
 This means that you 
 1. need to clone this repo
 2. change to the `dns-services-webhook/deploy` directory
-3. run ` helm install dns-services-webhook dns-services-webhook --namespace cert-manager`
+3. run `helm install dns-services-webhook dns-services-webhook --namespace cert-manager`
 
 ## Configuration
 
