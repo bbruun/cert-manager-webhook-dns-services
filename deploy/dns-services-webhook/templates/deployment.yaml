@@ -1,72 +1,125 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "dns-services-webhook.fullname" . }}
+  name: {{ include "cert-manager-webhook-infomaniak.fullname" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
-    app: {{ include "dns-services-webhook.name" . }}
-    chart: {{ include "dns-services-webhook.chart" . }}
-    release: {{ .Release.Name }}
-    heritage: {{ .Release.Service }}
+    {{- include "cert-manager-webhook-infomaniak.labels" . | nindent 4 }}
+  {{- with .Values.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: {{ .Values.strategy.type }}
   selector:
     matchLabels:
-      app: {{ include "dns-services-webhook.name" . }}
-      release: {{ .Release.Name }}
+      {{- include "cert-manager-webhook-infomaniak.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      labels:
-        app: {{ include "dns-services-webhook.name" . }}
-        release: {{ .Release.Name }}
-    spec:
-      serviceAccountName: {{ include "dns-services-webhook.fullname" . }}
-      {{- if .Values.image.imagePullSecrets -}}
-      imagePullSecrets:
-        - name: regcred
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
       {{- end }}
+      labels:
+        {{- include "cert-manager-webhook-infomaniak.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "cert-manager-webhook-infomaniak.fullname" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: {{ .Chart.Name }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- if .Values.image.sha }}
+          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}@sha256:{{ .Values.image.sha }}"
+          {{- else }}
+          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          {{- end }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --tls-cert-file=/tls/tls.crt
             - --tls-private-key-file=/tls/tls.key
-          env:
-            - name: GROUP_NAME
-              value: {{ .Values.groupName | quote }}
+            - --secure-port=8443
           ports:
             - name: https
-              containerPort: 443
+              containerPort: 8443
               protocol: TCP
+          {{- if .Values.probes.startup.enabled }}
+          startupProbe:
+            httpGet:
+              scheme: HTTPS
+              path: {{ .Values.probes.startup.path }}
+              port: https
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          {{- end }}
           livenessProbe:
             httpGet:
               scheme: HTTPS
-              path: /healthz
+              path: {{ .Values.probes.liveness.path }}
               port: https
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
           readinessProbe:
             httpGet:
               scheme: HTTPS
-              path: /healthz
+              path: {{ .Values.probes.readiness.path }}
               port: https
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            successThreshold: {{ .Values.probes.readiness.successThreshold }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            - name: GROUP_NAME
+              value: {{ .Values.groupName | quote }}
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.namespace
+          {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           volumeMounts:
             - name: certs
               mountPath: /tls
               readOnly: true
-          resources:
-{{ toYaml .Values.resources | indent 12 }}
       volumes:
         - name: certs
           secret:
-            secretName: {{ include "dns-services-webhook.servingCertificate" . }}
-    {{- with .Values.nodeSelector }}
+            secretName: {{ include "cert-manager-webhook-infomaniak.servingCertificate" . }}
+      {{- with .Values.nodeSelector }}
       nodeSelector:
-{{ toYaml . | indent 8 }}
-    {{- end }}
-    {{- with .Values.affinity }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
       affinity:
-{{ toYaml . | indent 8 }}
-    {{- end }}
-    {{- with .Values.tolerations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
       tolerations:
-{{ toYaml . | indent 8 }}
-    {{- end }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

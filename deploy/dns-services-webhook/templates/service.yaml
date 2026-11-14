@@ -1,12 +1,10 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "dns-services-webhook.fullname" . }}
+  name: {{ include "cert-manager-webhook-infomaniak.fullname" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
-    app: {{ include "dns-services-webhook.name" . }}
-    chart: {{ include "dns-services-webhook.chart" . }}
-    release: {{ .Release.Name }}
-    heritage: {{ .Release.Service }}
+    {{- include "cert-manager-webhook-infomaniak.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -15,5 +13,5 @@ spec:
       protocol: TCP
       name: https
   selector:
-    app: {{ include "dns-services-webhook.name" . }}
-    release: {{ .Release.Name }}
+    {{- include "cert-manager-webhook-infomaniak.selectorLabels" . | nindent 4 }}
+  ipFamilyPolicy: PreferDualStack

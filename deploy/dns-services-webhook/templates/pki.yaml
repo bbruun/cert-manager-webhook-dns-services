@@ -4,73 +4,67 @@
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
-  name: {{ include "dns-services-webhook.selfSignedIssuer" . }}
+  name: {{ include "cert-manager-webhook-infomaniak.selfSignedIssuer" . }}
   namespace: {{ .Release.Namespace | quote }}
   labels:
-    app: {{ include "dns-services-webhook.name" . }}
-    chart: {{ include "dns-services-webhook.chart" . }}
+    app: {{ include "cert-manager-webhook-infomaniak.name" . }}
+    chart: {{ include "cert-manager-webhook-infomaniak.chart" . }}
     release: {{ .Release.Name }}
     heritage: {{ .Release.Service }}
 spec:
   selfSigned: {}
-
 ---
-
 # Generate a CA Certificate used to sign certificates for the webhook
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: {{ include "dns-services-webhook.rootCACertificate" . }}
+  name: {{ include "cert-manager-webhook-infomaniak.rootCACertificate" . }}
   namespace: {{ .Release.Namespace | quote }}
   labels:
-    app: {{ include "dns-services-webhook.name" . }}
-    chart: {{ include "dns-services-webhook.chart" . }}
+    app: {{ include "cert-manager-webhook-infomaniak.name" . }}
+    chart: {{ include "cert-manager-webhook-infomaniak.chart" . }}
     release: {{ .Release.Name }}
     heritage: {{ .Release.Service }}
 spec:
-  secretName: {{ include "dns-services-webhook.rootCACertificate" . }}
+  secretName: {{ include "cert-manager-webhook-infomaniak.rootCACertificate" . }}
   duration: 43800h # 5y
   issuerRef:
-    name: {{ include "dns-services-webhook.selfSignedIssuer" . }}
-  commonName: "ca.dns-services-webhook.cert-manager"
+    name: {{ include "cert-manager-webhook-infomaniak.selfSignedIssuer" . }}
+  commonName: "ca.cert-manager-webhook-infomaniak.cert-manager"
   isCA: true
-
 ---
-
 # Create an Issuer that uses the above generated CA certificate to issue certs
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
-  name: {{ include "dns-services-webhook.rootCAIssuer" . }}
+  name: {{ include "cert-manager-webhook-infomaniak.rootCAIssuer" . }}
   namespace: {{ .Release.Namespace | quote }}
   labels:
-    app: {{ include "dns-services-webhook.name" . }}
-    chart: {{ include "dns-services-webhook.chart" . }}
+    app: {{ include "cert-manager-webhook-infomaniak.name" . }}
+    chart: {{ include "cert-manager-webhook-infomaniak.chart" . }}
     release: {{ .Release.Name }}
     heritage: {{ .Release.Service }}
 spec:
   ca:
-    secretName: {{ include "dns-services-webhook.rootCACertificate" . }}
-
+    secretName: {{ include "cert-manager-webhook-infomaniak.rootCACertificate" . }}
 ---
-
 # Finally, generate a serving certificate for the webhook to use
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: {{ include "dns-services-webhook.servingCertificate" . }}
+  name: {{ include "cert-manager-webhook-infomaniak.servingCertificate" . }}
   namespace: {{ .Release.Namespace | quote }}
   labels:
-    app: {{ include "dns-services-webhook.name" . }}
-    chart: {{ include "dns-services-webhook.chart" . }}
+    app: {{ include "cert-manager-webhook-infomaniak.name" . }}
+    chart: {{ include "cert-manager-webhook-infomaniak.chart" . }}
     release: {{ .Release.Name }}
     heritage: {{ .Release.Service }}
 spec:
-  secretName: {{ include "dns-services-webhook.servingCertificate" . }}
+  secretName: {{ include "cert-manager-webhook-infomaniak.servingCertificate" . }}
   duration: 8760h # 1y
   issuerRef:
-    name: {{ include "dns-services-webhook.rootCAIssuer" . }}
+    name: {{ include "cert-manager-webhook-infomaniak.rootCAIssuer" . }}
   dnsNames:
-  - {{ include "dns-services-webhook.fullname" . }}
-  - {{ include "dns-services-webhook.fullname" . }}.{{ .Release.Namespace }}
-  - {{ include "dns-services-webhook.fullname" . }}.{{ .Release.Namespace }}.svc
+  - {{ include "cert-manager-webhook-infomaniak.fullname" . }}
+  - {{ include "cert-manager-webhook-infomaniak.fullname" . }}.{{ .Release.Namespace }}
+  - {{ include "cert-manager-webhook-infomaniak.fullname" . }}.{{ .Release.Namespace }}.svc

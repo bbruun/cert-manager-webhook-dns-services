@@ -1,12 +1,3 @@
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: {{ include "dns-services-webhook.fullname" . }}
-  labels:
-    app: {{ include "dns-services-webhook.name" . }}
-    chart: {{ include "dns-services-webhook.chart" . }}
-    release: {{ .Release.Name }}
-    heritage: {{ .Release.Service }}
 ---
 # Grant the webhook permission to read the ConfigMap containing the Kubernetes
 # apiserver's requestheader-ca-certificate.
@@ -14,13 +5,10 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "dns-services-webhook.fullname" . }}:webhook-authentication-reader
+  name: {{ include "cert-manager-webhook-infomaniak.fullname" . }}:webhook-authentication-reader
   namespace: kube-system
   labels:
-    app: {{ include "dns-services-webhook.name" . }}
-    chart: {{ include "dns-services-webhook.chart" . }}
-    release: {{ .Release.Name }}
-    heritage: {{ .Release.Service }}
+    {{- include "cert-manager-webhook-infomaniak.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -28,20 +16,17 @@ roleRef:
 subjects:
   - apiGroup: ""
     kind: ServiceAccount
-    name: {{ include "dns-services-webhook.fullname" . }}
-    namespace: {{ .Release.Namespace }}
+    name: {{ include "cert-manager-webhook-infomaniak.fullname" . }}
+    namespace: {{ .Release.Namespace | quote }}
 ---
 # apiserver gets the auth-delegator role to delegate auth decisions to
 # the core apiserver
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "dns-services-webhook.fullname" . }}:auth-delegator
+  name: {{ include "cert-manager-webhook-infomaniak.fullname" . }}:auth-delegator
   labels:
-    app: {{ include "dns-services-webhook.name" . }}
-    chart: {{ include "dns-services-webhook.chart" . }}
-    release: {{ .Release.Name }}
-    heritage: {{ .Release.Service }}
+    {{- include "cert-manager-webhook-infomaniak.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -49,80 +34,67 @@ roleRef:
 subjects:
   - apiGroup: ""
     kind: ServiceAccount
-    name: {{ include "dns-services-webhook.fullname" . }}
-    namespace: {{ .Release.Namespace }}
+    name: {{ include "cert-manager-webhook-infomaniak.fullname" . }}
+    namespace: {{ .Release.Namespace | quote }}
 ---
 # Grant cert-manager permission to validate using our apiserver
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "dns-services-webhook.fullname" . }}:domain-solver
+  name: {{ include "cert-manager-webhook-infomaniak.fullname" . }}:domain-solver
   labels:
-    app: {{ include "dns-services-webhook.name" . }}
-    chart: {{ include "dns-services-webhook.chart" . }}
-    release: {{ .Release.Name }}
-    heritage: {{ .Release.Service }}
+    {{- include "cert-manager-webhook-infomaniak.labels" . | nindent 4 }}
 rules:
   - apiGroups:
       - {{ .Values.groupName }}
     resources:
-      - '*'
+      - "*"
     verbs:
-      - 'create'
+      - "create"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "dns-services-webhook.fullname" . }}:domain-solver
+  name: {{ include "cert-manager-webhook-infomaniak.fullname" . }}:domain-solver
   labels:
-    app: {{ include "dns-services-webhook.name" . }}
-    chart: {{ include "dns-services-webhook.chart" . }}
-    release: {{ .Release.Name }}
-    heritage: {{ .Release.Service }}
+    {{- include "cert-manager-webhook-infomaniak.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "dns-services-webhook.fullname" . }}:domain-solver
+  name: {{ include "cert-manager-webhook-infomaniak.fullname" . }}:domain-solver
 subjects:
   - apiGroup: ""
     kind: ServiceAccount
     name: {{ .Values.certManager.serviceAccountName }}
     namespace: {{ .Values.certManager.namespace }}
 ---
+# RBAC to allow the webhook to get the K8 secrets containing the credentials
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
-  name: {{ include "dns-services-webhook.fullname" . }}:flowcontrol-solver
+  name: {{ include "cert-manager-webhook-infomaniak.fullname" . }}:secret-fetcher
   labels:
-    app: {{ include "dns-services-webhook.name" . }}
-    chart: {{ include "dns-services-webhook.chart" . }}
-    release: {{ .Release.Name }}
-    heritage: {{ .Release.Service }}
+    {{- include "cert-manager-webhook-infomaniak.labels" . | nindent 4 }}
 rules:
   - apiGroups:
-      - "flowcontrol.apiserver.k8s.io"
+      - ""
     resources:
-      - 'prioritylevelconfigurations'
-      - 'flowschemas'
+      - "secrets"
     verbs:
-      - 'list'
-      - 'watch'
+      - "get"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
-  name: {{ include "dns-services-webhook.fullname" . }}:flowcontrol-solver
+  name: {{ include "cert-manager-webhook-infomaniak.fullname" . }}:secret-fetcher
   labels:
-    app: {{ include "dns-services-webhook.name" . }}
-    chart: {{ include "dns-services-webhook.chart" . }}
-    release: {{ .Release.Name }}
-    heritage: {{ .Release.Service }}
+    {{- include "cert-manager-webhook-infomaniak.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "dns-services-webhook.name" . }}:flowcontrol-solver
+  kind: Role
+  name: {{ include "cert-manager-webhook-infomaniak.fullname" . }}:secret-fetcher
 subjects:
   - apiGroup: ""
     kind: ServiceAccount
-    name: {{ include "dns-services-webhook.fullname" . }}
-    namespace: {{ .Release.Namespace }}
+    name: {{ include "cert-manager-webhook-infomaniak.fullname" . }}
+    namespace: {{ .Release.Namespace | quote }}
